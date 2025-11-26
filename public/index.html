@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WWW Chat - Sign In</title>
+    <link rel="stylesheet" href="css/login.css">
+</head>
+<body>
+    <div class="login-page">
+        <!-- 左上角 Logo / App 名稱 -->
+        <header class="login-header">
+            <div class="app-logo-circle">W</div>
+            <div class="app-title-group">
+                <div class="app-title">WWW Chat</div>
+                <div class="app-subtitle">Realtime Web Chat</div>
+            </div>
+        </header>
+
+        <!-- 主要登入卡片 -->
+        <main class="login-main">
+            <div class="login-card">
+                <!-- 小圖示 badge -->
+                <div class="card-icon-badge">
+                    <span>➜</span>
+                </div>
+
+                <!-- 標題區 -->
+                <h1 class="card-title" id="cardTitle">Sign in with email</h1>
+                <p class="card-subtitle">
+                    Join the chat and stay connected with your team.
+                </p>
+
+                <!-- Email / Password 表單 -->
+                <form id="loginForm" class="email-form">
+                    <div class="form-field">
+                        <label for="email">Email</label>
+                        <div class="field-with-icon">
+                            <span class="field-icon">✉️</span>
+                            <input
+                                type="email"
+                                id="email"
+                                name="email"
+                                placeholder="you@example.com"
+                                required
+                            >
+                        </div>
+                    </div>
+
+                    <div class="form-field">
+                        <label for="password">Password</label>
+                        <div class="field-with-icon">
+                            <span class="field-icon">🔒</span>
+                            <input
+                                type="password"
+                                id="password"
+                                name="password"
+                                placeholder="Enter your password"
+                                required
+                                minlength="6"
+                            >
+                            <button type="button" class="field-toggle" id="togglePassword">Show</button>
+                        </div>
+                    </div>
+
+                    <div class="form-helper-row">
+                        <div></div>
+                        <button type="button" class="text-link" id="forgotPasswordLink">
+                            Forgot password?
+                        </button>
+                    </div>
+
+                    <button type="submit" class="primary-btn" id="primarySubmitBtn">
+                        Sign in
+                    </button>
+
+                    <div class="error-message" id="errorMessage"></div>
+                    <div class="info-message" id="infoMessage"></div>
+                    <button type="button" class="text-link resend-link" id="resendVerificationBtn">
+                        沒收到驗證信？重新寄送
+                    </button>
+
+                    <!-- 分隔線 -->
+                    <div class="divider">
+                        <span class="divider-line"></span>
+                        <span class="divider-text">or sign in with</span>
+                        <span class="divider-line"></span>
+                    </div>
+
+                    <!-- Google 登入 -->
+                    <button type="button" class="google-btn" id="googleSignInBtn">
+                        <span class="google-icon">G</span>
+                        <span>Continue with Google</span>
+                    </button>
+                </form>
+
+                <!-- 註冊 / 切換模式 -->
+                <div class="switch-mode-row">
+                    <span id="switchModeText">Don’t have an account?</span>
+                    <button type="button" class="text-link" id="switchModeBtn">
+                        Sign up
+                    </button>
+                </div>
+            </div>
+        </main>
+
+        <!-- 底部淡淡雲朵 -->
+        <div class="clouds-layer"></div>
+    </div>
+
+    <script src="js/login.js"></script>
+</body>
+</html>

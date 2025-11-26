@@ -1,0 +1,40 @@
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${PGUSER:-chatapp}
+      POSTGRES_PASSWORD: ${PGPASSWORD:-changeme}
+      POSTGRES_DB: ${PGDATABASE:-chatapp}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-chatapp} -d ${PGDATABASE:-chatapp}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  chatroom:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      SESSION_SECRET: ${SESSION_SECRET:-changeme}
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: ${PGUSER:-chatapp}
+      PGPASSWORD: ${PGPASSWORD:-changeme}
+      PGDATABASE: ${PGDATABASE:-chatapp}
+      DATABASE_URL: postgresql://${PGUSER:-chatapp}:${PGPASSWORD:-changeme}@db:5432/${PGDATABASE:-chatapp}?sslmode=disable
+    volumes:
+      - ./public:/app/public
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  db_data:

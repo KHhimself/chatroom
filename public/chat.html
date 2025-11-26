@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>聊天室 - WWW Technologies HW5</title>
+    <link rel="stylesheet" href="css/chat.css">
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+    <!-- 新版兩欄聊天版面：左側為聊天清單 (ChatSidebar)，右側為目前對話 (ChatWindow) -->
+    <div class="chat-app-shell">
+        <div class="chat-container">
+            <!-- ChatSidebar：左側聊天清單與使用者資訊（舊 part1 / part3 合併） -->
+            <aside class="chat-sidebar">
+                <!-- 使用者資訊區（由原本右側 user-profile 移入） -->
+                <div class="sidebar-user">
+                    <div class="sidebar-user-avatar">
+                        <img src="images/default-avatar.svg" alt="User Avatar" id="userAvatar">
+                    </div>
+                    <div class="sidebar-user-info">
+                        <div class="sidebar-user-name" id="userName">User</div>
+                        <div class="sidebar-user-status">Info account</div>
+                    </div>
+                    <button class="sidebar-icon-btn" id="settingsBtn" type="button" aria-label="Settings">
+                        ⚙️
+                    </button>
+                </div>
+
+                <!-- 房間 / 聊天類型切換 Pills（由原 Group / One-to-One 重新排版） -->
+                <div class="chat-tabs">
+                    <button class="room-btn active" id="groupChatBtn">
+                        Groups
+                        <span class="group-notification" id="groupNotification"></span>
+                    </button>
+                    <button class="room-btn" id="privateChatBtn">Personal</button>
+                </div>
+
+                <!-- 線上資訊與分隔標題 -->
+                <div class="sidebar-meta">
+                    <div class="online-info">
+                        <span>Online</span>
+                        <span id="onlineCount" class="online-count">0</span>
+                    </div>
+                    <div class="sidebar-section-label">Messages</div>
+                </div>
+
+                <!-- 聊天清單：沿用原 usersList，改成類似 WhatsApp 聯絡人列 -->
+                <div class="chat-list" id="usersList">
+                    <!-- 動態生成使用者列表 -->
+                </div>
+
+                <!-- 退出聊天室按鈕：由原本右側 Quit 改為側邊欄底部的小按鈕 -->
+                <button class="sidebar-quit-btn" id="quitBtn" type="button">
+                    <span class="quit-icon">🚪</span>
+                    <span class="quit-text">Leave</span>
+                </button>
+            </aside>
+
+            <!-- ChatWindow：右側目前對話與訊息區（舊 part2） -->
+            <section class="chat-window">
+                <!-- 聊天標題列（header 中加入通話相關圖示按鈕） -->
+                <header class="chat-header">
+                    <div class="chat-header-main">
+                        <div class="chat-header-left">
+                            <div class="chat-avatar-placeholder"></div>
+                            <div class="chat-title-block">
+                                <h2 id="chatTitle">Group</h2>
+                                <p class="chat-subtitle" id="chatSubtitle">群組聊天室</p>
+                            </div>
+                        </div>
+                        <div class="chat-header-meta">
+                            <div class="chat-participants" id="chatParticipants">成員：--</div>
+                            <!-- 視訊 / 通話控制：由原右側 panel 改為 header icon buttons -->
+                            <div class="chat-header-actions">
+                                <button class="header-icon-btn camera-btn" id="cameraBtn" type="button" title="Camera On/Off">
+                                    📷
+                                </button>
+                                <button class="header-icon-btn mic-btn" id="muteBtn" type="button" title="Mute/Unmute">
+                                    🎤
+                                </button>
+                                <button class="header-icon-btn" id="startCallBtn" type="button" title="Start Call">
+                                    📞
+                                </button>
+                                <button class="header-icon-btn" id="leaveCallBtn" type="button" title="Leave Call" style="display: none;">
+                                    ✖
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </header>
+
+                <!-- 訊息顯示區域 + 視訊畫面預覽 -->
+                <div class="chat-body">
+                    <!-- 視訊窗口：由左側移入訊息區上方，作為通話時的小預覽區域 -->
+                    <div class="video-container" id="videoContainer">
+                        <div class="video-wrapper">
+                            <video id="localVideo" autoplay muted></video>
+                            <div class="video-label">Me</div>
+                        </div>
+                        <div class="video-wrapper">
+                            <video id="remoteVideo" autoplay></video>
+                            <div class="video-label" id="remoteLabel">Other</div>
+                        </div>
+                    </div>
+
+                    <!-- 訊息列表 -->
+                    <div class="messages-area" id="messagesArea">
+                        <!-- 動態生成訊息 -->
+                    </div>
+
+                    <!-- 輸入中提示 -->
+                    <div class="typing-indicator" id="typingIndicator"></div>
+                </div>
+
+                <!-- 訊息輸入列：改為貼近 WhatsApp 風格的圓角輸入框與送出按鈕 -->
+                <div class="input-area">
+                    <div class="input-inner">
+                        <button class="input-icon-btn" id="emojiBtn" type="button">😊</button>
+                        <button class="input-icon-btn" id="imageBtn" type="button" aria-label="Upload image">
+                            <svg class="icon-image" viewBox="0 0 24 24" aria-hidden="true">
+                                <rect x="3.5" y="3.5" width="17" height="17" rx="3.5" ry="3.5"></rect>
+                                <circle cx="8.5" cy="8.5" r="2"></circle>
+                                <path d="M5 16.5l4-4 3 3 4.5-5.5 3.5 6.5" class="icon-image-zigzag"></path>
+                            </svg>
+                        </button>
+                        <input type="file" id="imageInput" accept="image/*" style="display: none;">
+                        <input 
+                            type="text" 
+                            id="messageInput" 
+                            placeholder="Type a message..." 
+                            maxlength="500"
+                        >
+                    </div>
+                    <button class="send-btn" id="sendBtn" type="button">Send</button>
+                </div>
+            </section>
+        </div>
+    </div>
+    
+    <!-- Emoji 選擇器 -->
+    <div class="emoji-picker" id="emojiPicker">
+        <div class="emoji-grid">
+            <!-- 動態生成 emoji -->
+        </div>
+    </div>
+
+    <!-- 通知徽章元素（仍保留，供原本通知邏輯使用） -->
+    <div class="notification-badges" id="notificationBadges"></div>
+    
+    <script src="js/chat.js"></script>
+</body>
+</html> 
