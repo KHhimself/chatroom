@@ -1,38 +1,36 @@
 # WWW Chatroom Project
 
-以 Node.js / Express / Socket.io 打造的即時聊天室，使用 PostgreSQL 儲存訊息與使用者，前端為純 HTML/CSS/Vanilla JS。支援 Email/密碼（含驗證信）與 Google OAuth 登入，圖片訊息採 S3 直傳。沒有語音/視訊通話功能。
+以 Node.js / Express / Socket.io 打造的即時聊天室，使用 SQLite 檔案儲存訊息與使用者，前端為純 HTML/CSS/Vanilla JS。支援 Email/密碼（含驗證信）與 Google OAuth 登入，圖片訊息採 S3 直傳。沒有語音/視訊通話功能。
 
 ## 功能概覽
 - **登入/註冊**：Email + 密碼（需驗證 Email 後才能登入）；可選 Google OAuth。忘記密碼端點存在但尚未實作，會回傳 501。
 - **聊天室**：預設群組 `group`，點擊線上名單可開啟一對一私聊。線上人數與名單以 session 去重。
 - **訊息類型**：文字、Emoji、圖片（前端限制 2MB；後端對 base64 圖片設 500KB 防護）。聊天歷史一次載入最近 100 則。
 - **狀態提示**：輸入中提示、加入/離開系統訊息、私聊/群聊未讀徽章。
-- **資料儲存**：PostgreSQL 紀錄 users/groups/conversations/messages；啟動時確保預設群組與會話存在，並把登入者加入群組成員表。
+- **資料儲存**：SQLite 檔案紀錄 users/groups/conversations/messages；啟動時確保預設群組與會話存在，並把登入者加入群組成員表。適合單節點/中小型併發。
 - **使用者設定**：已登入後可於聊天室內變更暱稱（即時廣播給所有人）。
 
 ## 系統需求
 - Node.js 16+（建議 18 LTS）
-- PostgreSQL
-- Docker / Docker Compose（可選，提供快速啟動環境）
+- SQLite（內嵌，預設檔案位於 `tmp/chatroom.sqlite` 或環境變數 `SQLITE_PATH`）
+- Docker / Docker Compose（可選，提供快速啟動環境，無需外部 DB）
 
 ## 快速開始
 
 ### 以 Docker 執行
 ```bash
-# 1) 啟動 Postgres
-docker compose up -d db
-# 2) 建立/更新資料庫結構
+# 1) 建立/更新資料庫結構（預設檔案：./data/chatroom.sqlite）
 docker compose run --rm chatroom npm run db:migrate
-# 3) 啟動應用
+# 2) 啟動應用
 docker compose up --build
 # 瀏覽 http://localhost:3000
 ```
-> 預設以 `NODE_ENV=development` 執行，Cookie secure 屬性會依環境自動調整。
+> 預設以 `NODE_ENV=development` 執行，Cookie secure 屬性會依環境自動調整。資料庫檔案掛載在 `./data`，方便持久化。
 
 ### 本地開發
-1) 安裝 Node（建議 18）
+1) 安裝 Node（建議 18），安裝依賴
 ```bash
-npm install
+npm install   # better-sqlite3、bcrypt 需要 python3/make/g++ 可編譯環境
 ```
 2) 設定 `.env`（見下方環境變數）。
 3) 建立資料表
@@ -57,8 +55,8 @@ npm run dev   # 開發模式（nodemon）
 - `SESSION_SECRET`：Session 密鑰（production 必填）
 - `SESSION_COOKIE_SECURE`：`true/false` 明確設定 Cookie secure 屬性（預設依 `NODE_ENV`）
 - `NODE_ENV`：development / production
-- `DATABASE_URL`（或 `PGHOST`、`PGPORT`、`PGUSER`、`PGPASSWORD`、`PGDATABASE`）
 - `APP_BASE_URL`：驗證信連結基底（預設 `http://localhost:3000`）
+- `SQLITE_PATH`：SQLite 檔案路徑（預設 `tmp/chatroom.sqlite`）
 
 ### AWS S3（圖片直傳）
 - `AWS_ACCESS_KEY_ID`
@@ -94,7 +92,7 @@ hw5/
 ├─ public/                # 前端靜態資源（HTML/CSS/JS）
 ├─ src/
 │  ├─ auth.js             # Email/密碼註冊登入、Google OAuth、驗證信 token
-│  ├─ db.js               # pg 連線池
+│  ├─ db.js               # SQLite 連線/查詢工具
 │  └─ mail.js             # 驗證信寄送
 ├─ scripts/               # DB 工具
 │  ├─ dbMigrate.js        # 套用 migrations
@@ -110,5 +108,5 @@ hw5/
 - 私聊房名：`private_<sessionIdA>_<sessionIdB>`（排序後組合）；聊天歷史一次載入 100 筆。
 - 圖片訊息：前端限制檔案大小 2MB；若改以 base64 上傳，後端會拒絕超過 500KB 的 payload。
 - Session 儲存：使用記憶體型 session store，不適合長期生產環境。
-
+- SQLite 適合單節點與中小型併發，若要水平擴充可考慮改用雲端 RDB（PostgreSQL/MySQL）。
 

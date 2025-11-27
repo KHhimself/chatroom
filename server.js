@@ -232,56 +232,55 @@ async function ensureDefaultGroup() {
     return defaultGroupContext;
   }
 
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
+    await pool.query('BEGIN');
 
-    const groupResult = await client.query('SELECT id FROM groups WHERE name = $1 LIMIT 1', [
+    const groupResult = await pool.query('SELECT id FROM groups WHERE name = ? LIMIT 1', [
       DEFAULT_GROUP_NAME
     ]);
 
     let groupId;
-    if (groupResult.rowCount > 0) {
+    if (groupResult.rows.length > 0) {
       groupId = groupResult.rows[0].id;
     } else {
       groupId = randomUUID();
-      await client.query(
+      await pool.query(
         'INSERT INTO groups (id, name, description) VALUES ($1, $2, $3)',
         [groupId, DEFAULT_GROUP_NAME, 'Default group chat']
       );
     }
 
     const conversationId = createDeterministicUuid(`group:${groupId}`);
-    await client.query(
+    await pool.query(
       `INSERT INTO conversations (id, type, group_id)
        VALUES ($1, 'group', $2)
        ON CONFLICT (id) DO NOTHING`,
       [conversationId, groupId]
     );
 
-    await client.query('COMMIT');
+    await pool.query('COMMIT');
 
     defaultGroupContext = { groupId, conversationId };
     return defaultGroupContext;
   } catch (error) {
-    await client.query('ROLLBACK');
+    await pool.query('ROLLBACK');
     throw error;
-  } finally {
-    client.release();
   }
 }
 
 async function ensureUser(nickname) {
   const userId = randomUUID();
-  const result = await pool.query(
+  await pool.query(
     `INSERT INTO users (id, username)
      VALUES ($1, $2)
      ON CONFLICT (username)
-     DO UPDATE SET username = EXCLUDED.username
-     RETURNING users.id`,
+     DO NOTHING`,
     [userId, nickname]
   );
-
+  const result = await pool.query(
+    `SELECT id FROM users WHERE username = $1 LIMIT 1`,
+    [nickname]
+  );
   return result.rows[0].id;
 }
 
@@ -321,7 +320,7 @@ async function fetchConversationMessages(conversationId, roomName, limit = 100) 
     senderSessionId: row.sender_id,
     content: row.content,
     type: row.type,
-    timestamp: row.created_at.toISOString(),
+    timestamp: new Date(row.created_at).toISOString(),
     room: roomName
   }));
 }
@@ -425,23 +424,33 @@ function buildEmailConflictResponse(res) {
 }
 
 function isDuplicateUserError(error) {
-  if (!error || error.code !== '23505') {
+  if (!error) return false;
+
+  // PostgreSQL
+  if (error.code === '23505') {
+    if (error.constraint) {
+      return error.constraint === 'users_email_key' || error.constraint === 'users_username_key';
+    }
+    const detailText =
+      typeof error.detail === 'string'
+        ? error.detail.toLowerCase()
+        : error.data && typeof error.data.details === 'string'
+          ? error.data.details.toLowerCase()
+          : null;
+    if (detailText) {
+      return detailText.includes('(email)') || detailText.includes('(username)');
+    }
     return false;
   }
 
-  if (error.constraint) {
-    return error.constraint === 'users_email_key' || error.constraint === 'users_username_key';
-  }
-
-  let detailText = null;
-  if (typeof error.detail === 'string') {
-    detailText = error.detail.toLowerCase();
-  } else if (error.data && typeof error.data.details === 'string') {
-    detailText = error.data.details.toLowerCase();
-  }
-
-  if (detailText) {
-    return detailText.includes('(email)') || detailText.includes('(username)');
+  // SQLite
+  if (error.code && error.code.toUpperCase().startsWith('SQLITE_CONSTRAINT')) {
+    const message = (error.message || '').toLowerCase();
+    return (
+      message.includes('users.email') ||
+      message.includes('users.username') ||
+      message.includes('unique constraint failed')
+    );
   }
 
   return false;
@@ -635,7 +644,7 @@ app.post('/auth/resend-verification', async (req, res) => {
       `SELECT COUNT(*) AS attempts
        FROM email_verification_tokens
        WHERE user_id = $1
-         AND created_at > NOW() - INTERVAL '${RESEND_RATE_LIMIT_WINDOW_MINUTES} minutes'`,
+         AND created_at > datetime('now', '-${RESEND_RATE_LIMIT_WINDOW_MINUTES} minutes')`,
       [user.id]
     );
     const recentAttempts = Number.parseInt(recentAttemptsResult.rows[0]?.attempts || '0', 10);
@@ -649,7 +658,7 @@ app.post('/auth/resend-verification', async (req, res) => {
 
     await pool.query(
       `UPDATE email_verification_tokens
-       SET used_at = NOW()
+       SET used_at = CURRENT_TIMESTAMP
        WHERE user_id = $1 AND used_at IS NULL`,
       [user.id]
     );
@@ -761,15 +770,19 @@ app.post('/api/user/nickname', async (req, res) => {
   }
 
   try {
-    const result = await pool.query(
+    await pool.query(
       `UPDATE users
-       SET username = $1, updated_at = NOW()
-       WHERE id = $2
-       RETURNING id, username`,
+       SET username = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
       [rawName, req.session.userId]
     );
 
-    if (result.rowCount === 0) {
+    const result = await pool.query(
+      `SELECT id, username FROM users WHERE id = $1 LIMIT 1`,
+      [req.session.userId]
+    );
+
+    if (!result.rows || result.rows.length === 0) {
       return res.status(404).json({ error: 'USER_NOT_FOUND' });
     }
 
@@ -952,20 +965,20 @@ io.on('connection', async (socket) => {
         roomName = generatePrivateRoomName(user.sessionId, targetUser.sessionId);
       }
 
+      const createdAt = new Date().toISOString();
       const insertResult = await pool.query(
-        `INSERT INTO messages (conversation_id, sender_id, content, type)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id, created_at`,
-        [conversationId, user.sessionId, data.content, messageType]
+        `INSERT INTO messages (conversation_id, sender_id, content, type, created_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [conversationId, user.sessionId, data.content, messageType, createdAt]
       );
 
       const savedMessage = {
-        id: String(insertResult.rows[0].id),
+        id: String(insertResult.result?.lastInsertRowid || Date.now()),
         nickname: user.nickname,
         senderSessionId: user.sessionId,
         content: data.content,
         type: messageType,
-        timestamp: insertResult.rows[0].created_at.toISOString(),
+        timestamp: createdAt,
         room: roomName
       };
 

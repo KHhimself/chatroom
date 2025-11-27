@@ -1,8 +1,8 @@
-const { pool } = require('../src/db');
+const { query, pool } = require('../src/db');
 
 async function checkHealth() {
   try {
-    const result = await pool.query('SELECT 1 AS ok');
+    const result = await query('SELECT 1 AS ok');
     console.log(result.rows[0]);
   } finally {
     await pool.end();

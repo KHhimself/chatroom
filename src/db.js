@@ -1,42 +1,60 @@
-const { Pool } = require('pg');
+const path = require('path');
+const fs = require('fs');
+const Database = require('better-sqlite3');
 
 if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
 }
 
-function buildPoolConfig() {
-  const connectionString = process.env.DATABASE_URL;
-  if (connectionString) {
-    return { connectionString };
-  }
+const defaultDbPath = path.join(__dirname, '..', 'tmp', 'chatroom.sqlite');
+const dbPath = process.env.SQLITE_PATH || defaultDbPath;
+fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
-  const config = {};
-  if (process.env.PGHOST) {
-    config.host = process.env.PGHOST;
-  }
-  if (process.env.PGPORT) {
-    const parsedPort = Number(process.env.PGPORT);
-    if (!Number.isNaN(parsedPort)) {
-      config.port = parsedPort;
-    }
-  }
-  if (process.env.PGUSER) {
-    config.user = process.env.PGUSER;
-  }
-  if (process.env.PGPASSWORD) {
-    config.password = process.env.PGPASSWORD;
-  }
-  if (process.env.PGDATABASE) {
-    config.database = process.env.PGDATABASE;
-  }
+const db = new Database(dbPath);
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
 
-  return config;
+function normalizeSql(sql) {
+  return sql.replace(/\$([0-9]+)/g, '?');
 }
 
-const pool = new Pool(buildPoolConfig());
+function isSelectLike(sql) {
+  const trimmed = sql.trim().toLowerCase();
+  return trimmed.startsWith('select') || trimmed.startsWith('with') || trimmed.startsWith('pragma');
+}
 
-pool.on('error', (error) => {
-  console.error('Unexpected database error', error);
-});
+async function query(sql, params = []) {
+  const normalized = normalizeSql(sql);
+  const stmt = db.prepare(normalized);
 
-module.exports = { pool };
+  if (isSelectLike(sql) || /\breturning\b/i.test(sql)) {
+    const rows = stmt.all(params);
+    return { rows };
+  }
+
+  const result = stmt.run(params);
+  return {
+    rows: [],
+    result
+  };
+}
+
+async function end() {
+  db.close();
+}
+
+// 提供與 pg Pool 相容的介面，便於現有程式碼使用
+const pool = {
+  query,
+  connect: async () => ({
+    query,
+    release: () => {}
+  }),
+  end
+};
+
+module.exports = {
+  pool,
+  db,
+  query
+};

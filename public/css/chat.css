@@ -819,7 +819,7 @@ body {
 
 .sidebar-quit-btn {
     margin-top: 10px;
-    padding: 8px 10px;
+    padding: 8px 14px;
     border-radius: 999px;
     border: 1px solid #fecaca;
     background: #fef2f2;
@@ -828,7 +828,7 @@ body {
     font-weight: 500;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    justify-content: center;
     cursor: pointer;
     align-self: flex-start;
     transition: background 0.2s ease, transform 0.12s ease, box-shadow 0.15s ease;
@@ -841,7 +841,7 @@ body {
 }
 
 .quit-icon {
-    font-size: 14px;
+    display: none;
 }
 
 .quit-text {

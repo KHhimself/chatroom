@@ -1,6 +1,6 @@
 const { randomUUID } = require('crypto');
 const bcrypt = require('bcrypt');
-const { pool } = require('./db');
+const { pool, query } = require('./db');
 
 const BCRYPT_ROUNDS = Number.parseInt(process.env.BCRYPT_ROUNDS || '10', 10);
 
@@ -36,14 +36,14 @@ async function createLocalUser({ email, password }) {
   // For now, keep username equal to email so chat display names stay unique
   const username = normalized;
 
-  const result = await pool.query(
+  await query(
     `INSERT INTO users (id, email, username, password_hash, provider, email_verified)
-     VALUES ($1, $2, $3, $4, 'local', false)
-     RETURNING *`,
+     VALUES (?, ?, ?, ?, 'local', 0)`,
     [id, normalized, username, passwordHash]
   );
 
-  return result.rows[0];
+  const select = await query('SELECT * FROM users WHERE id = ? LIMIT 1', [id]);
+  return select.rows[0];
 }
 
 async function verifyPassword(user, password) {
@@ -54,11 +54,11 @@ async function verifyPassword(user, password) {
 async function createEmailVerificationToken(userId, { ttlHours = 24 } = {}) {
   const token = randomUUID();
   const id = randomUUID();
-  const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000).toISOString();
 
-  await pool.query(
+  await query(
     `INSERT INTO email_verification_tokens (id, user_id, token, expires_at)
-     VALUES ($1, $2, $3, $4)`,
+     VALUES (?, ?, ?, ?)`,
     [id, userId, token, expiresAt]
   );
 
@@ -68,62 +68,61 @@ async function createEmailVerificationToken(userId, { ttlHours = 24 } = {}) {
 // Try to consume a verification token and mark the related user as verified.
 // Returns { ok: true, user } or { ok: false, reason }.
 async function consumeEmailVerificationToken(token) {
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
+    await query('BEGIN');
 
-    const tokenResult = await client.query(
+    const tokenResult = await query(
       `SELECT *
        FROM email_verification_tokens
-       WHERE token = $1
+       WHERE token = ?
        LIMIT 1`,
       [token]
     );
 
-    if (tokenResult.rowCount === 0) {
-      await client.query('ROLLBACK');
+    if (!tokenResult.rows || tokenResult.rows.length === 0) {
+      await query('ROLLBACK');
       return { ok: false, reason: 'TOKEN_NOT_FOUND' };
     }
 
     const row = tokenResult.rows[0];
     const now = new Date();
+    const expiresAt = row.expires_at ? new Date(row.expires_at) : null;
+
     if (row.used_at) {
-      await client.query('ROLLBACK');
+      await query('ROLLBACK');
       return { ok: false, reason: 'TOKEN_ALREADY_USED' };
     }
 
-    if (row.expires_at && now > row.expires_at) {
-      await client.query('ROLLBACK');
+    if (expiresAt && now > expiresAt) {
+      await query('ROLLBACK');
       return { ok: false, reason: 'TOKEN_EXPIRED' };
     }
 
-    await client.query(
+    await query(
       `UPDATE email_verification_tokens
-       SET used_at = NOW()
-       WHERE id = $1`,
+       SET used_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
       [row.id]
     );
 
-    const userResult = await client.query(
+    await query(
       `UPDATE users
-       SET email_verified = true, updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
+       SET email_verified = 1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
       [row.user_id]
     );
 
-    await client.query('COMMIT');
+    const userResult = await query('SELECT * FROM users WHERE id = ? LIMIT 1', [row.user_id]);
+    await query('COMMIT');
 
-    if (userResult.rowCount === 0) {
+    if (!userResult.rows || userResult.rows.length === 0) {
       return { ok: false, reason: 'USER_NOT_FOUND' };
     }
 
     return { ok: true, user: userResult.rows[0] };
   } catch (error) {
-    await client.query('ROLLBACK');
+    await query('ROLLBACK');
     throw error;
-  } finally {
-    client.release();
   }
 }
 
@@ -142,32 +141,32 @@ async function findOrCreateGoogleUser(profile) {
   }
 
   // 1) If user already linked by google_sub, return it
-  const byGoogle = await pool.query(
-    'SELECT * FROM users WHERE google_sub = $1 LIMIT 1',
+  const byGoogle = await query(
+    'SELECT * FROM users WHERE google_sub = ? LIMIT 1',
     [googleSub]
   );
-  if (byGoogle.rowCount > 0) {
+  if (byGoogle.rows.length > 0) {
     return byGoogle.rows[0];
   }
 
   // 2) If we have an email, try linking to an existing local account
   if (primaryEmail) {
-    const byEmail = await pool.query(
-      'SELECT * FROM users WHERE email = $1 LIMIT 1',
+    const byEmail = await query(
+      'SELECT * FROM users WHERE email = ? LIMIT 1',
       [primaryEmail]
     );
-    if (byEmail.rowCount > 0) {
+    if (byEmail.rows.length > 0) {
       const existing = byEmail.rows[0];
-      const updatedResult = await pool.query(
+      await query(
         `UPDATE users
-         SET google_sub = $1,
-             email_verified = true,
-             updated_at = NOW()
-         WHERE id = $2
-         RETURNING *`,
+         SET google_sub = ?, 
+             email_verified = 1,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
         [googleSub, existing.id]
       );
-      return updatedResult.rows[0];
+      const updated = await query('SELECT * FROM users WHERE id = ? LIMIT 1', [existing.id]);
+      return updated.rows[0];
     }
   }
 
@@ -175,14 +174,14 @@ async function findOrCreateGoogleUser(profile) {
   const id = randomUUID();
   const username = primaryEmail || displayName;
 
-  const insertResult = await pool.query(
+  await query(
     `INSERT INTO users (id, email, username, provider, google_sub, email_verified)
-     VALUES ($1, $2, $3, 'google', $4, true)
-     RETURNING *`,
+     VALUES (?, ?, ?, 'google', ?, 1)`,
     [id, primaryEmail, username, googleSub]
   );
 
-  return insertResult.rows[0];
+  const inserted = await query('SELECT * FROM users WHERE id = ? LIMIT 1', [id]);
+  return inserted.rows[0];
 }
 
 module.exports = {
@@ -195,4 +194,3 @@ module.exports = {
   consumeEmailVerificationToken,
   findOrCreateGoogleUser
 };
-
