@@ -1,4 +1,4 @@
-# WWW Technologies & Applications 2025 — HW5 Chatroom
+# WWW Chatroom Project
 
 以 Node.js / Express / Socket.io 打造的即時聊天室，使用 PostgreSQL 儲存訊息與使用者，前端為純 HTML/CSS/Vanilla JS。支援 Email/密碼（含驗證信）與 Google OAuth 登入，圖片訊息採 S3 直傳。沒有語音/視訊通話功能。
 
