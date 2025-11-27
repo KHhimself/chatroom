@@ -1,23 +1,23 @@
 # WWW Technologies & Applications 2025 — HW5 Chatroom
 
-一個以 Node.js / Express / Socket.io / WebRTC 打造的即時聊天室。支援群聊、私聊、影像通話、圖片與表情，並提供 Email 與 Google 登入。前端是純 HTML/CSS/Vanilla JS，無框架。
+以 Node.js / Express / Socket.io 打造的即時聊天室，使用 PostgreSQL 儲存訊息與使用者，前端為純 HTML/CSS/Vanilla JS。支援 Email/密碼（含驗證信）與 Google OAuth 登入，圖片訊息採 S3 直傳。沒有語音/視訊通話功能。
 
 ## 功能概覽
-- **登入**：Email/密碼（含信箱驗證）或 Google OAuth。
-- **聊天室**：群聊與私聊分頁，線上人數/列表即時更新。
-- **訊息**：文字、Emoji、圖片（2MB 限制，直傳 S3），輸入中提示、未讀徽章。
--, **通知**：房間/私聊訊息徽章提示。
--, **影像通話**：私聊 WebRTC；大視窗顯示對方、右下角浮窗顯示自己；通話時隱藏訊息輸入區。
-- **媒體控制**：麥克風/攝影機開關具狀態顏色與圖示。
+- **登入/註冊**：Email + 密碼（需驗證 Email 後才能登入）；可選 Google OAuth。忘記密碼端點存在但尚未實作，會回傳 501。
+- **聊天室**：預設群組 `group`，點擊線上名單可開啟一對一私聊。線上人數與名單以 session 去重。
+- **訊息類型**：文字、Emoji、圖片（前端限制 2MB；後端對 base64 圖片設 500KB 防護）。聊天歷史一次載入最近 100 則。
+- **狀態提示**：輸入中提示、加入/離開系統訊息、私聊/群聊未讀徽章。
+- **資料儲存**：PostgreSQL 紀錄 users/groups/conversations/messages；啟動時確保預設群組與會話存在，並把登入者加入群組成員表。
+- **使用者設定**：已登入後可於聊天室內變更暱稱（即時廣播給所有人）。
 
 ## 系統需求
-- Node.js 16+（建議 18 LTS；過舊版本會因不支援 optional chaining `?.` 而報錯）
-- PostgreSQL（持久化訊息、使用者與群組）
-- Docker / Docker Compose（可選）
+- Node.js 16+（建議 18 LTS）
+- PostgreSQL
+- Docker / Docker Compose（可選，提供快速啟動環境）
 
 ## 快速開始
 
-### 以 Docker 執行（建議）
+### 以 Docker 執行
 ```bash
 # 1) 啟動 Postgres
 docker compose up -d db
@@ -27,47 +27,43 @@ docker compose run --rm chatroom npm run db:migrate
 docker compose up --build
 # 瀏覽 http://localhost:3000
 ```
-> 提示：預設 compose 以 `NODE_ENV=development` 啟動（避免非 HTTPS 下 Cookie 被 secure 屬性擋掉）。若上線到 HTTPS，請改成 production 並確保代理設定 trust proxy。
+> 預設以 `NODE_ENV=development` 執行，Cookie secure 屬性會依環境自動調整。
 
 ### 本地開發
-1) 安裝/切換 Node 版本（建議用 nvm）
-```bash
-nvm install 18
-nvm use 18
-node -v   # 確認至少 16，建議 18+
-```
-2) 安裝依賴
+1) 安裝 Node（建議 18）
 ```bash
 npm install
 ```
-3) 設定環境變數（見下方）。先準備 `.env`。
-4) 建立資料庫結構
+2) 設定 `.env`（見下方環境變數）。
+3) 建立資料表
 ```bash
 npm run db:migrate
 ```
-5) 啟動（開發模式）
+4) 啟動
 ```bash
-npm run dev   # nodemon
-# 或 npm start（正式模式）
+npm run dev   # 開發模式（nodemon）
+# 或 npm start
 ```
 5) 開啟 http://localhost:3000
 
 ## 主要指令
 - `npm start`：啟動伺服器。
 - `npm run dev`：開發模式（nodemon）。
-- `npm run db:migrate`：建立/更新資料表（依序套用 `migrations/*.sql`，含 schema_migrations 紀錄）。
+- `npm run db:migrate`：依序套用 `migrations/*.sql`。
 - `npm run db:health`：檢查 DB 連線。
 
 ## 環境變數
 - `PORT`（預設 3000）
-- `SESSION_SECRET`：Session 密鑰
+- `SESSION_SECRET`：Session 密鑰（production 必填）
+- `SESSION_COOKIE_SECURE`：`true/false` 明確設定 Cookie secure 屬性（預設依 `NODE_ENV`）
 - `NODE_ENV`：development / production
 - `DATABASE_URL`（或 `PGHOST`、`PGPORT`、`PGUSER`、`PGPASSWORD`、`PGDATABASE`）
 - `APP_BASE_URL`：驗證信連結基底（預設 `http://localhost:3000`）
-### AWS S3 直傳
+
+### AWS S3（圖片直傳）
 - `AWS_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY`
-- `AWS_REGION`
+- `AWS_REGION`（若未指定會 fallback 到 us-east-1）
 - `S3_BUCKET_NAME`
 
 ### Email 驗證信
@@ -76,7 +72,7 @@ npm run dev   # nodemon
 - `SMTP_USER`
 - `SMTP_PASS`
 - `MAIL_FROM`
-未設定時，開發模式會把信件內容輸出到 console。
+未設定 SMTP 時，開發模式會將驗證信內容輸出到 console。
 
 ### Google OAuth
 - `GOOGLE_CLIENT_ID`
@@ -84,53 +80,35 @@ npm run dev   # nodemon
 - `GOOGLE_CALLBACK_URL`（預設 `http://localhost:3000/auth/google/callback`）
 
 ## 使用說明
-1) 登入：Email/密碼或 Google。一旦登入成功會導向 `/chat`。
-2) 群聊：預設房間 `group`。
-3) 私聊：左側點選使用者開始一對一；標題會顯示私人對話。
-4) 傳送訊息：輸入框旁可選 Emoji 或圖片（≤2MB，直傳 S3）。
-5) 通話（僅私聊）：按電話圖示開始，對方接通後大視窗顯示對方、自身浮窗在右下。通話中訊息輸入列與聊天列表隱藏，離開通話後恢復。
-6) 媒體開關：麥克風/攝影機按鈕有開關圖示與顏色（藍=開、紅=關）。
+1) 在登入頁以 Email/密碼註冊；收信點擊驗證連結後才能登入。或直接用 Google 登入（需事先設定金鑰）。
+2) 登入後進入 `/chat`，預設在群聊 `Group`。
+3) 左側線上名單點擊任一使用者可開啟私聊；標題會顯示對方名稱。
+4) 訊息框可輸入文字、選取 Emoji，或上傳圖片（前端限制 2MB，使用 S3 預簽網址上傳）。
+5) 任何聊天室都會顯示輸入中提示；切換房間時會看到未讀徽章。
+6) 點擊設定圖示可修改暱稱（即時同步給所有人）。忘記密碼按鈕目前僅回應「未實作」。
 
 ## 專案結構
 ```
 hw5/
-├─ server.js              # 主要後端，Express + Socket.io + WebRTC signaling
-├─ public/                # 前端靜態資源
-│  ├─ index.html          # 登入/註冊頁
-│  ├─ chat.html           # 聊天頁
-│  ├─ css/
-│  │  ├─ login.css
-│  │  └─ chat.css
-│  ├─ js/
-│  │  ├─ login.js
-│  │  └─ chat.js
-│  └─ images/             # 靜態圖片、icons
-├─ src/                   # 後端模組
-│  ├─ auth.js             # 驗證、註冊、Google OAuth、密碼雜湊
-│  ├─ db.js               # pg 連線池配置
-│  └─ mail.js             # 寄信（驗證信）
-├─ scripts/               # DB 工具腳本
+├─ server.js              # Express + Socket.io 伺服器與 API
+├─ public/                # 前端靜態資源（HTML/CSS/JS）
+├─ src/
+│  ├─ auth.js             # Email/密碼註冊登入、Google OAuth、驗證信 token
+│  ├─ db.js               # pg 連線池
+│  └─ mail.js             # 驗證信寄送
+├─ scripts/               # DB 工具
 │  ├─ dbMigrate.js        # 套用 migrations
 │  └─ dbHealth.js         # 健康檢查
 ├─ migrations/            # 資料表定義
-│  ├─ 001_init.sql
-│  └─ 002_auth.sql
-├─ docker-compose.yml     # Docker 服務編排
-├─ Dockerfile             # 應用容器建置
+├─ docker-compose.yml
+├─ Dockerfile
 └─ README.md
 ```
 
 ## 重要行為說明
-- 預設群組：啟動時會建立/確認群組與對應 conversation。
-- 私聊房名：`private_<sessionIdA>_<sessionIdB>`（排序後組合）。
-- 圖片上傳：大小限制 2MB，超過會回傳錯誤提示。
-- WebRTC：僅在私聊；ICE 使用 `stun:stun.l.google.com:19302`。
-- UI：通話中自動切換全畫布視訊，訊息列表與輸入框隱藏；結束通話後恢復。
+- 預設群組：啟動時自動建立/確認 `group` 與對應 conversation，並把登入者加入 group_members。
+- 私聊房名：`private_<sessionIdA>_<sessionIdB>`（排序後組合）；聊天歷史一次載入 100 筆。
+- 圖片訊息：前端限制檔案大小 2MB；若改以 base64 上傳，後端會拒絕超過 500KB 的 payload。
+- Session 儲存：使用記憶體型 session store，不適合長期生產環境。
 
-## 常見問題
-- **視訊無法啟動**：確認 HTTPS 或 localhost，並允許瀏覽器使用相機/麥克風。
-- **DB 連不到**：檢查 `DATABASE_URL` 或 PG 相關環境變數，並先執行 `npm run db:migrate`。
-- **Email 驗證信未收到**：在未設定 SMTP 時會輸出到 console；正式寄送需設定 SMTP 參數或使用 Gmail App Password。
 
-## 授權
-僅供課程/作業使用。***

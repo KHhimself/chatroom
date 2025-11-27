@@ -278,6 +278,10 @@ body {
     font-weight: 600;
 }
 
+.chat-participants.hidden {
+    display: none;
+}
+
 .chat-body {
     flex: 1;
     display: flex;
@@ -574,7 +578,6 @@ body {
 .sidebar-user {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 12px;
     padding-bottom: 12px;
     border-bottom: 1px solid #e5e7eb;
@@ -598,6 +601,7 @@ body {
 
 .sidebar-user-info {
     flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
 }
@@ -606,6 +610,9 @@ body {
     font-size: 15px;
     font-weight: 600;
     color: #111827;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .sidebar-user-status {
@@ -626,6 +633,7 @@ body {
     justify-content: center;
     font-size: 16px;
     transition: background 0.2s ease, transform 0.15s ease;
+    flex-shrink: 0;
 }
 
 .sidebar-icon-btn:hover {

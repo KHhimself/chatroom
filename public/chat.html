@@ -71,39 +71,12 @@
                         </div>
                         <div class="chat-header-meta">
                             <div class="chat-participants" id="chatParticipants">成員：--</div>
-                            <!-- 視訊 / 通話控制：由原右側 panel 改為 header icon buttons -->
-                            <div class="chat-header-actions">
-                                <button class="header-icon-btn camera-btn" id="cameraBtn" type="button" title="Camera On/Off">
-                                    📷
-                                </button>
-                                <button class="header-icon-btn mic-btn" id="muteBtn" type="button" title="Mute/Unmute">
-                                    🎤
-                                </button>
-                                <button class="header-icon-btn" id="startCallBtn" type="button" title="Start Call">
-                                    📞
-                                </button>
-                                <button class="header-icon-btn" id="leaveCallBtn" type="button" title="Leave Call" style="display: none;">
-                                    ✖
-                                </button>
-                            </div>
                         </div>
                     </div>
                 </header>
 
                 <!-- 訊息顯示區域 + 視訊畫面預覽 -->
                 <div class="chat-body">
-                    <!-- 視訊窗口：由左側移入訊息區上方，作為通話時的小預覽區域 -->
-                    <div class="video-container" id="videoContainer">
-                        <div class="video-wrapper">
-                            <video id="localVideo" autoplay muted></video>
-                            <div class="video-label">Me</div>
-                        </div>
-                        <div class="video-wrapper">
-                            <video id="remoteVideo" autoplay></video>
-                            <div class="video-label" id="remoteLabel">Other</div>
-                        </div>
-                    </div>
-
                     <!-- 訊息列表 -->
                     <div class="messages-area" id="messagesArea">
                         <!-- 動態生成訊息 -->

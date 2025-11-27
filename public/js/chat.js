@@ -5,25 +5,15 @@ let currentUser = null;
 let typingTimer = null;
 let onlineUsers = new Map();
 let notifications = new Map();
-let localStream = null;
-let remoteStream = null;
-let peerConnection = null;
-let isInCall = false;
 let currentChatSocketId = null; // 當前私聊對象的 socket.id
 let currentChatSessionId = null; // 當前私聊對象的 sessionId
 let currentUserSessionId = null; // 自身的 sessionId
 let currentChatPartnerName = null; // 私聊對象名稱
-let micEnabled = true;
-let cameraEnabled = true;
 const MAX_IMAGE_SIZE_BYTES = 2 * 1024 * 1024; // 2MB 上傳限制
 let latestOnlineSnapshot = { users: [], count: 0 };
-
-// WebRTC 配置
-const rtcConfig = {
-    iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' }
-    ]
-};
+let groupMembers = [];
+let currentUserEmail = null;
+const DEBUG_MEMBER_HEADER = false; // CHANGED: toggle member header debug logging
 
 // Emoji 列表
 const emojis = [
@@ -69,35 +59,35 @@ const elements = {
     imageInput: document.getElementById('imageInput'),
     quitBtn: document.getElementById('quitBtn'),
     emojiPicker: document.getElementById('emojiPicker'),
-    videoContainer: document.getElementById('videoContainer'),
-    localVideo: document.getElementById('localVideo'),
-    remoteVideo: document.getElementById('remoteVideo'),
-    remoteLabel: document.getElementById('remoteLabel'),
-    cameraBtn: document.getElementById('cameraBtn'),
-    muteBtn: document.getElementById('muteBtn'),
-    startCallBtn: document.getElementById('startCallBtn'),
-    leaveCallBtn: document.getElementById('leaveCallBtn'),
     inputArea: document.querySelector('.input-area'),
     userName: document.getElementById('userName'),
     userAvatar: document.getElementById('userAvatar')
 };
 
 // 初始化
-document.addEventListener('DOMContentLoaded', function() {
-    // 從 session 獲取當前用戶名
-    fetch('/api/user')
-        .then(response => response.json())
-        .then(data => {
+document.addEventListener('DOMContentLoaded', async function () {
+    try {
+        const resp = await fetch('/api/user');
+        if (resp.ok) {
+            const data = await resp.json();
             if (data.nickname) {
                 currentUser = data.nickname;
                 elements.userName.textContent = data.nickname;
-                currentUserSessionId = data.userId || null;
             }
-        })
-        .catch(error => {
-            console.error('獲取用戶資訊失敗:', error);
-        });
-        
+            if (data.userId) {
+                currentUserSessionId = data.userId;
+            }
+            if (data.email) {
+                currentUserEmail = data.email;
+            }
+        } else {
+            console.error('獲取用戶資訊失敗：HTTP', resp.status);
+        }
+    } catch (error) {
+        console.error('獲取用戶資訊失敗:', error);
+    }
+
+    // 確定已經拿到 currentUserSessionId / currentUser 再建立 socket
     initializeSocket();
     initializeEventListeners();
     initializeEmojiPicker();
@@ -157,23 +147,6 @@ function initializeSocket() {
         updateTypingIndicator(data);
     });
     
-    // WebRTC 信令
-    socket.on('offer', async (data) => {
-        await handleOffer(data);
-    });
-    
-    socket.on('answer', async (data) => {
-        await handleAnswer(data);
-    });
-    
-    socket.on('iceCandidate', async (data) => {
-        await handleIceCandidate(data);
-    });
-    
-    socket.on('callEnded', () => {
-        endCall();
-    });
-
     socket.on('messageRejected', handleMessageRejected);
 
     socket.on('nicknameUpdated', (payload) => {
@@ -218,10 +191,16 @@ function initializeSocket() {
             return;
         }
 
+        if (data.room === 'group' && Array.isArray(data.members)) {
+            setGroupMembers(data.members);
+        }
+
         elements.messagesArea.innerHTML = '';
         data.messages.forEach(message => {
             displayMessage(message);
         });
+
+        refreshHeaderMeta(currentRoom);
     });
 }
 
@@ -261,12 +240,6 @@ function initializeEventListeners() {
     if (elements.settingsBtn) {
         elements.settingsBtn.addEventListener('click', promptNicknameChange);
     }
-    
-    // 視訊通話按鈕
-    elements.startCallBtn.addEventListener('click', startCall);
-    elements.leaveCallBtn.addEventListener('click', leaveCall);
-    elements.cameraBtn.addEventListener('click', toggleCamera);
-    elements.muteBtn.addEventListener('click', toggleMute);
     
     // 登出按鈕
     elements.quitBtn.addEventListener('click', () => {
@@ -314,9 +287,9 @@ function updateOnlineUsers(data) {
     data.users.forEach(user => {
         onlineUsers.set(user.id, user);
 
-        if (user.id === socket.id) {
+        // 過濾掉自己（以 sessionId 為準）
+        if (currentUserSessionId && user.sessionId === currentUserSessionId) {
             currentUser = currentUser || user.nickname;
-            currentUserSessionId = user.sessionId || currentUserSessionId;
             return;
         }
 
@@ -672,6 +645,36 @@ function updateNotificationBadges() {
     }
 }
 
+function setGroupMembers(members) {
+    if (!Array.isArray(members)) {
+        return;
+    }
+
+    const seen = new Set();
+    const normalized = [];
+
+    members.forEach((member) => {
+        const email = (member?.email || '').trim();
+        const nickname = (member?.nickname || '').trim();
+        const userId = member?.userId || member?.id || null;
+        const key = (email || nickname || '').toLowerCase();
+        if (!key || seen.has(key)) {
+            return;
+        }
+        seen.add(key);
+        if (userId && userId === currentUserSessionId && email) {
+            currentUserEmail = email;
+        }
+        normalized.push({
+            email: email || null,
+            nickname: nickname || null,
+            userId
+        });
+    });
+
+    groupMembers = normalized;
+}
+
 function getSessionIdsFromRoom(room) {
     if (!room || !room.startsWith('private_')) {
         return [];
@@ -702,28 +705,29 @@ function refreshHeaderMeta(room) {
         return;
     }
 
-    // 群組房間隱藏通話按鈕，私聊才顯示
-    if (elements.chatHeaderActions) {
-        const hideActions = room === 'group';
-        elements.chatHeaderActions.classList.toggle('hidden', hideActions);
-    }
-
     if (room === 'group') {
         const count = latestOnlineSnapshot.count || 0;
         elements.chatSubtitle.textContent = `群組聊天室 · ${count} 人在線`;
         setHeaderAvatar('👥');
 
-        const names = latestOnlineSnapshot.users
-            .map(user => user.nickname)
-            .filter(Boolean);
+        const headerMembers = groupMembers.length > 0
+            ? groupMembers
+            : latestOnlineSnapshot.users.map((user) => ({
+                email: user.email || null,
+                nickname: user.nickname,
+                userId: user.sessionId || user.id || null
+            }));
 
-        if (names.length === 0) {
-            elements.chatParticipants.textContent = '成員：--';
-        } else {
-            const preview = names.slice(0, 3).join('、');
-            const suffix = names.length > 3 ? '、...' : '';
-            elements.chatParticipants.textContent = `成員：${preview}${suffix}`;
-        }
+        logMemberHeaderDebug({
+            room,
+            type: 'group',
+            members: headerMembers,
+            currentUserSessionId,
+            currentUserEmail,
+            currentUser
+        });
+        elements.chatParticipants.classList.remove('hidden');
+        elements.chatParticipants.textContent = buildMemberHeaderText(headerMembers);
         return;
     }
 
@@ -735,18 +739,90 @@ function refreshHeaderMeta(room) {
     const avatarInitial = counterpartName ? counterpartName.charAt(0).toUpperCase() : '👤';
     setHeaderAvatar(avatarInitial);
 
-    if (counterpartName) {
-        elements.chatSubtitle.textContent = `私人對話 · ${counterpartName}`;
-        elements.chatParticipants.textContent = `成員：你、${counterpartName}`;
-    } else {
-        elements.chatSubtitle.textContent = '私人對話';
-        elements.chatParticipants.textContent = '成員：你';
-    }
+    elements.chatSubtitle.textContent = counterpartName
+        ? `私人對話 · ${counterpartName}`
+        : '私人對話';
+    elements.chatParticipants.classList.add('hidden');
+    elements.chatParticipants.textContent = '';
 }
 
 function setHeaderAvatar(text) {
     if (!elements.chatAvatar) return;
     elements.chatAvatar.textContent = text || '';
+}
+
+function logMemberHeaderDebug(context) { // NEW: optional debug logger
+    if (!DEBUG_MEMBER_HEADER) return;
+    try {
+        // eslint-disable-next-line no-console
+        console.log('[member-header]', JSON.stringify(context, null, 2));
+    } catch (error) {
+        // ignore logging errors
+    }
+}
+
+// CHANGED: 成員標題生成邏輯（以身分 key 去重，自己顯示「你」）
+function formatMemberLabels(members) {
+    if (!Array.isArray(members)) return [];
+
+    const seenKeys = new Set();
+    const labels = [];
+
+    members.forEach((m) => {
+        if (!m) return;
+
+        const rawEmail = (m.email || m.userEmail || '').trim();
+        const rawName =
+            (m.displayName ||
+                m.username ||
+                m.name ||
+                m.nickname ||
+                rawEmail ||
+                '').trim();
+        const idKeyRaw = m.userId || m.id || m.sessionId || null;
+        const idKey = idKeyRaw ? String(idKeyRaw).trim() : '';
+        const identityKey = (idKey || rawEmail || rawName || '').toLowerCase();
+        if (!identityKey) return;
+
+        // 先用「身分 key」去重（同一個人只保留一次）
+        if (seenKeys.has(identityKey)) return;
+        seenKeys.add(identityKey);
+
+        const currentIdKey = currentUserSessionId ? String(currentUserSessionId).trim() : '';
+        const isSelfById = currentIdKey && idKey && currentIdKey === idKey;
+        const isSelfByEmail =
+            !!currentUserEmail &&
+            !!rawEmail &&
+            rawEmail.toLowerCase() === currentUserEmail.toLowerCase();
+        const isSelfByName =
+            !rawEmail &&
+            !!currentUser &&
+            !!rawName &&
+            rawName.toLowerCase() === currentUser.toLowerCase();
+
+        const isSelf = isSelfById || isSelfByEmail || isSelfByName;
+        const label = isSelf ? '你' : (rawName || rawEmail);
+
+        if (label) {
+            labels.push(label);
+        }
+    });
+
+    return labels;
+}
+
+// CHANGED: 成員標題組字串
+function buildMemberHeaderText(members) {
+    const labels = formatMemberLabels(members);
+    if (labels.length === 0) {
+        return '成員：--';
+    }
+
+    if (labels.length === 1) {
+        return `成員：${labels[0]}`;
+    }
+
+    return `成員：${labels.join('、')}`;
 }
 
 function formatChatTime(timestamp) {
@@ -763,234 +839,11 @@ function formatChatTime(timestamp) {
     return `${weekday} ${ampm}${hours}:${minutes}`;
 }
 
-// WebRTC 視訊通話
-async function startCall() {
-    if (currentRoom === 'group' || !currentChatSocketId) {
-        alert('視訊通話僅在私聊中可用');
-        return;
-    }
-    
-    try {
-        localStream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: true
-        });
-        
-        elements.localVideo.srcObject = localStream;
-        
-        // 創建 PeerConnection
-        peerConnection = new RTCPeerConnection(rtcConfig);
-        
-        // 添加本地流
-        localStream.getTracks().forEach(track => {
-            peerConnection.addTrack(track, localStream);
-        });
-        
-        // 處理遠端流
-        peerConnection.ontrack = (event) => {
-            remoteStream = event.streams[0];
-            elements.remoteVideo.srcObject = remoteStream;
-        };
-        
-        // 處理 ICE 候選
-        peerConnection.onicecandidate = (event) => {
-            if (event.candidate) {
-                socket.emit('iceCandidate', {
-                    to: currentChatSocketId,
-                    candidate: event.candidate
-                });
-            }
-        };
-        
-        // 創建 offer
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
-        
-        socket.emit('offer', {
-            to: currentChatSocketId,
-            offer: offer
-        });
-        
-        isInCall = true;
-        updateCallUI(true);
-        
-    } catch (error) {
-        console.error('無法啟動視訊通話:', error);
-        alert('無法存取攝影機和麥克風');
-    }
-}
-
-async function handleOffer(data) {
-    try {
-        if (!localStream) {
-            localStream = await navigator.mediaDevices.getUserMedia({
-                video: true,
-                audio: true
-            });
-            elements.localVideo.srcObject = localStream;
-        }
-        
-        peerConnection = new RTCPeerConnection(rtcConfig);
-        
-        localStream.getTracks().forEach(track => {
-            peerConnection.addTrack(track, localStream);
-        });
-        
-        peerConnection.ontrack = (event) => {
-            remoteStream = event.streams[0];
-            elements.remoteVideo.srcObject = remoteStream;
-        };
-        
-        peerConnection.onicecandidate = (event) => {
-            if (event.candidate) {
-                socket.emit('iceCandidate', {
-                    to: data.from,
-                    candidate: event.candidate
-                });
-            }
-        };
-        
-        await peerConnection.setRemoteDescription(data.offer);
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-        
-        socket.emit('answer', {
-            to: data.from,
-            answer: answer
-        });
-        
-        isInCall = true;
-        updateCallUI(true);
-        
-    } catch (error) {
-        console.error('處理 offer 失敗:', error);
-    }
-}
-
-async function handleAnswer(data) {
-    try {
-        await peerConnection.setRemoteDescription(data.answer);
-    } catch (error) {
-        console.error('處理 answer 失敗:', error);
-    }
-}
-
-async function handleIceCandidate(data) {
-    try {
-        if (peerConnection) {
-            await peerConnection.addIceCandidate(data.candidate);
-        }
-    } catch (error) {
-        console.error('處理 ICE candidate 失敗:', error);
-    }
-}
-
-function leaveCall() {
-    if (currentChatSocketId) {
-        socket.emit('endCall', { to: currentChatSocketId });
-    }
-    endCall();
-}
-
-function endCall() {
-    if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-        localStream = null;
-    }
-    
-    if (peerConnection) {
-        peerConnection.close();
-        peerConnection = null;
-    }
-    
-    elements.localVideo.srcObject = null;
-    elements.remoteVideo.srcObject = null;
-    
-    isInCall = false;
-    updateCallUI(false);
-}
-
-function toggleCamera() {
-    if (!isInCall) {
-        alert('請先開始通話');
-        return;
-    }
-    
-    if (localStream) {
-        const videoTrack = localStream.getVideoTracks()[0];
-        if (videoTrack) {
-            videoTrack.enabled = !videoTrack.enabled;
-            setCameraButtonState(videoTrack.enabled);
-        }
-    }
-}
-
-function toggleMute() {
-    if (!isInCall) {
-        alert('請先開始通話');
-        return;
-    }
-    
-    if (localStream) {
-        const audioTrack = localStream.getAudioTracks()[0];
-        if (audioTrack) {
-            audioTrack.enabled = !audioTrack.enabled;
-            setMicButtonState(audioTrack.enabled);
-        }
-    }
-}
-
-function updateCallUI(inCall) {
-    isInCall = inCall;
-    elements.startCallBtn.style.display = inCall ? 'none' : 'flex';
-    elements.leaveCallBtn.style.display = inCall ? 'flex' : 'none';
-    elements.videoContainer.classList.toggle('active', inCall);
-    if (elements.chatBody) {
-        elements.chatBody.classList.toggle('in-call', inCall);
-    }
-    if (elements.chatWindow) {
-        elements.chatWindow.classList.toggle('in-call', inCall);
-    }
-    
-    if (inCall) {
-        syncMediaButtonStates();
-    } else {
-        setCameraButtonState(true);
-        setMicButtonState(true);
-    }
-}
-
 // 生成私聊房間名稱（使用 sessionId 與後端保持一致）
 function generatePrivateRoomName(sessionId1, sessionId2) {
     const sortedIds = [sessionId1, sessionId2].sort();
     return `private_${sortedIds[0]}_${sortedIds[1]}`;
 } 
-
-// 介面：同步按鈕圖示狀態
-function setMicButtonState(enabled) {
-    micEnabled = enabled;
-    if (!elements.muteBtn) return;
-    elements.muteBtn.classList.toggle('on', enabled);
-    elements.muteBtn.classList.toggle('off', !enabled);
-    elements.muteBtn.textContent = enabled ? '🎤' : '🔇';
-    elements.muteBtn.title = enabled ? '麥克風開啟' : '麥克風關閉';
-}
-
-function setCameraButtonState(enabled) {
-    cameraEnabled = enabled;
-    if (!elements.cameraBtn) return;
-    elements.cameraBtn.classList.toggle('on', enabled);
-    elements.cameraBtn.classList.toggle('off', !enabled);
-    elements.cameraBtn.textContent = '📷';
-    elements.cameraBtn.title = enabled ? '攝影機開啟' : '攝影機關閉';
-}
-
-function syncMediaButtonStates() {
-    const audioTrack = localStream?.getAudioTracks()?.[0];
-    const videoTrack = localStream?.getVideoTracks()?.[0];
-    setMicButtonState(audioTrack ? audioTrack.enabled : true);
-    setCameraButtonState(videoTrack ? videoTrack.enabled : true);
-}
 
 // 修改暱稱
 async function promptNicknameChange() {

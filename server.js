@@ -195,6 +195,7 @@ io.use((socket, next) => {
 
 // 儲存使用者資訊
 const users = new Map(); // socketId -> userInfo
+const sessionConnections = new Map(); // sessionId -> active connection count
 const DEFAULT_GROUP_NAME = 'group';
 let defaultGroupContext = null;
 
@@ -322,6 +323,24 @@ async function fetchConversationMessages(conversationId, roomName, limit = 100) 
     type: row.type,
     timestamp: row.created_at.toISOString(),
     room: roomName
+  }));
+}
+
+async function fetchGroupMembers(groupId) {
+  const result = await pool.query(
+    `SELECT DISTINCT u.id,
+            u.username AS nickname,
+            u.email
+     FROM group_members gm
+     JOIN users u ON u.id = gm.user_id
+     WHERE gm.group_id = $1`,
+    [groupId]
+  );
+
+  return result.rows.map((row) => ({
+    userId: row.id,
+    nickname: row.nickname || row.email || 'Unknown',
+    email: row.email || null
   }));
 }
 
@@ -705,14 +724,25 @@ app.get('/logout', (req, res) => {
 });
 
 // API端點：獲取當前用戶資訊
-app.get('/api/user', (req, res) => {
+app.get('/api/user', async (req, res) => {
   if (!req.session.nickname || !req.session.userId) {
     return res.status(401).json({ error: 'Not authenticated' });
   }
-  
+
+  let email = null;
+  try {
+    const result = await pool.query('SELECT email FROM users WHERE id = $1 LIMIT 1', [
+      req.session.userId
+    ]);
+    email = result.rows[0]?.email || null;
+  } catch (error) {
+    console.warn('Failed to load user email for /api/user', error);
+  }
+
   res.json({
     nickname: req.session.nickname,
-    userId: req.session.userId
+    userId: req.session.userId,
+    email
   });
 });
 
@@ -827,6 +857,7 @@ io.on('connection', async (socket) => {
     return;
   }
 
+  let groupContext = null;
   try {
     if (!sessionData.userId) {
       const ensuredUserId = await ensureUser(sessionData.nickname);
@@ -835,12 +866,31 @@ io.on('connection', async (socket) => {
         sessionData.save(() => {});
       }
     }
-    await ensureDefaultGroup();
+    groupContext = await ensureDefaultGroup();
+
+    // 確保群聊成員表有一筆唯一的紀錄，避免後續查詢時重複出現
+    try {
+      await pool.query(
+        `INSERT INTO group_members (group_id, user_id)
+         VALUES ($1, $2)
+         ON CONFLICT (group_id, user_id) DO NOTHING`,
+        [groupContext.groupId, sessionData.userId]
+      );
+    } catch (error) {
+      console.warn('Failed to upsert group membership', {
+        userId: sessionData.userId,
+        groupId: groupContext?.groupId
+      });
+    }
   } catch (error) {
     console.error('Failed to initialize connection.', error);
     socket.disconnect();
     return;
   }
+  // 記錄該 session 的連線數，避免同帳號多開時重複廣播加入事件
+  const previousConnections = sessionConnections.get(sessionData.userId) || 0;
+  const isFirstConnectionForSession = previousConnections === 0;
+  sessionConnections.set(sessionData.userId, previousConnections + 1);
   
   // 使用者連線
   const userInfo = {
@@ -857,10 +907,12 @@ io.on('connection', async (socket) => {
   socket.join('group');
   
   // 廣播使用者加入
-  socket.to('group').emit('userJoined', {
-    nickname: userInfo.nickname,
-    timestamp: new Date().toISOString()
-  });
+  if (isFirstConnectionForSession) {
+    socket.to('group').emit('userJoined', {
+      nickname: userInfo.nickname,
+      timestamp: new Date().toISOString()
+    });
+  }
   
   // 發送線上使用者列表
   updateOnlineUsers();
@@ -977,11 +1029,15 @@ io.on('connection', async (socket) => {
     const requestedRoom = data.room;
     try {
       if (requestedRoom === 'group') {
-        const context = await ensureDefaultGroup();
-        const messages = await fetchConversationMessages(context.conversationId, 'group');
+        const context = groupContext || (await ensureDefaultGroup());
+        const [messages, members] = await Promise.all([
+          fetchConversationMessages(context.conversationId, 'group'),
+          fetchGroupMembers(context.groupId)
+        ]);
         socket.emit('chatHistory', {
           room: 'group',
-          messages
+          messages,
+          members
         });
         return;
       }
@@ -1010,57 +1066,43 @@ io.on('connection', async (socket) => {
     }
   });
   
-  // WebRTC 信令
-  socket.on('offer', (data) => {
-    socket.to(data.to).emit('offer', {
-      offer: data.offer,
-      from: socket.id
-    });
-  });
-  
-  socket.on('answer', (data) => {
-    socket.to(data.to).emit('answer', {
-      answer: data.answer,
-      from: socket.id
-    });
-  });
-  
-  socket.on('iceCandidate', (data) => {
-    socket.to(data.to).emit('iceCandidate', {
-      candidate: data.candidate,
-      from: socket.id
-    });
-  });
-  
-  socket.on('endCall', (data) => {
-    socket.to(data.to).emit('callEnded', {
-      from: socket.id
-    });
-  });
-  
   // 斷線處理
   socket.on('disconnect', () => {
     const user = users.get(socket.id);
     if (!user) return;
+    const sessionId = user.sessionId;
     
     users.delete(socket.id);
-    
-    // 廣播使用者離開
-    socket.to('group').emit('userLeft', {
-      nickname: user.nickname,
-      timestamp: new Date().toISOString()
-    });
+    const currentConnections = sessionConnections.get(sessionId) || 0;
+    const nextConnections = Math.max(currentConnections - 1, 0);
+    if (nextConnections === 0) {
+      sessionConnections.delete(sessionId);
+      // 廣播使用者離開（僅最後一個連線離線時）
+      socket.to('group').emit('userLeft', {
+        nickname: user.nickname,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      sessionConnections.set(sessionId, nextConnections);
+    }
     
     updateOnlineUsers();
   });
   
   // 更新線上使用者列表
   function updateOnlineUsers() {
-    const onlineUsers = Array.from(users.values()).map(user => ({
-      id: user.id,
-      nickname: user.nickname,
-      sessionId: user.sessionId
-    }));
+    // 以 sessionId 去重，避免同一帳號多連線導致名單重複
+    const dedupedBySession = new Map();
+    for (const user of users.values()) {
+      if (!dedupedBySession.has(user.sessionId)) {
+        dedupedBySession.set(user.sessionId, {
+          id: user.id,
+          nickname: user.nickname,
+          sessionId: user.sessionId
+        });
+      }
+    }
+    const onlineUsers = Array.from(dedupedBySession.values());
     
     io.emit('onlineUsers', {
       users: onlineUsers,
